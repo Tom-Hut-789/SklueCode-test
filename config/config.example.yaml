@@ -1,0 +1,29 @@
+protocol: openai
+model: deepseek-v4
+base_url: https://api.deepseek.com/v1
+api_key: YOUR_API_KEY
+# Optional settings
+session_mode: ephemeral
+enable_extended_thinking: false
+thinking_budget_tokens: 1024
+storage_path: data/sessions
+
+# OpenAI example:
+#protocol: openai
+#model: gpt-4.1-mini
+#base_url: https://api.openai.com/v1
+#api_key: YOUR_API_KEY
+# Optional settings
+#session_mode: ephemeral
+#enable_extended_thinking: false
+#thinking_budget_tokens: 1024
+#storage_path: data/sessions
+
+# Anthropic example:
+# protocol: anthropic
+# model: claude-sonnet-4-20250514
+# base_url: https://api.anthropic.com/v1
+# api_key: YOUR_API_KEY
+# session_mode: persistent
+# enable_extended_thinking: true
+# thinking_budget_tokens: 2048
