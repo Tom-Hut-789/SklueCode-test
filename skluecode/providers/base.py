@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import AsyncIterator, Protocol
 
 from ..models import AppConfig, SessionRecord, StreamEvent
+from ..tools.base import NeutralToolDef
 
 
 class ProviderError(RuntimeError):
@@ -30,5 +31,6 @@ class Provider(Protocol):
         self,
         config: AppConfig,
         session: SessionRecord,
+        tools: list[NeutralToolDef] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         ...

@@ -1,22 +1,21 @@
-SklueCode is a terminal-first AI assistant built in Python. This focuses on a TUI chat experience with streaming model output, multi-turn context, configurable providers, and optional local session persistence.
-
-# ✨ Key Features
-- Dual Provider Support: Compatible with both OpenAI and Anthropic Claude API protocols, allowing free switching through configuration
-- Streaming Output: Shows the model generation process in real-time, no need to wait for the full response
-- Multi-turn Conversation: Full context memory, supports continuous dialogue
-- Session Persistence: Optional temporary sessions or local persistent sessions, recent conversations can be restored after restart
-- Claude Extended Thinking: Supports displaying Claude's thought process
-- Clear Abstraction: Unified Provider interface, making it easy to extend with new model backends later
-
-# 🏗️ Tech Stack
-- Terminal Interface: Textual - modern TUI framework
-- HTTP Client: httpx - asynchronous HTTP requests
-- Configuration Parsing: PyYAML
-
-# 🎯 Design Highlights
-- Low-coupling Architecture: Provider layer, session storage layer, and TUI layer are completely decoupled
-- Extensible Design: Adding a new Provider only requires implementing the unified interface, no need to modify the main flow
-- Friendly Error Handling: Clear prompts for configuration errors, network issues, etc., so the program won't crash directly
+SklueCode is a terminal-first AI assistant built in Python. It supports coding agent capabilities: the model can call built-in workspace tools to operate on code repositories and feedback execution results to users. It delivers a full TUI chat experience with streaming model output, multi-turn context dialogue, configurable model providers, and optional local session persistence.
+✨ Key Features
+Dual Provider Support: Compatible with both OpenAI and Anthropic Claude API protocols, allowing free switching through configuration
+Built-in Coding Agent Tools: Six sandboxed workspace tools for file reading/writing, code editing, command execution, file lookup and content search with strict safety restrictions
+Streaming Output: Shows the model generation process in real-time, no need to wait for the full response
+Multi-turn Conversation: Full context memory, supports continuous dialogue
+Session Persistence: Optional temporary sessions or local persistent sessions, recent conversations can be restored after restart
+Claude Extended Thinking: Supports displaying Claude's thought process
+Clear Abstraction: Unified Provider interface, making it easy to extend with new model backends later
+🏗️ Tech Stack
+Terminal Interface: Textual - modern TUI framework
+HTTP Client: httpx - asynchronous HTTP requests
+Configuration Parsing: PyYAML
+Agent Tool Infrastructure: Custom sandboxed tool framework under src/skluecode/tools/ for repository manipulation
+🎯 Design Highlights
+Low-coupling Architecture: Provider layer, session storage layer, TUI layer and agent tool layer are completely decoupled
+Extensible Design: Adding a new Provider or custom tool only requires implementing the unified interface, no need to modify the main flow
+Friendly Error Handling: Clear prompts for configuration errors, network issues, tool operation permission mismatches etc., so the program won't crash directly
 
 # Operation Guide
 ## Requirements
@@ -51,7 +50,7 @@ copy config\config.example.yaml config\config.yaml
 
 ## Run
 
-Set the source directory on `PYTHONPATH` and launch the app:
+Set the source directory on `PYTHONPATH` and launch the app (**windows PS**):
 (1)No need to manually activate the virtual environment, just run it with the installed uv tool. Because uv run automatically loads the virtual environment.
 ```bash
 $env:PYTHONPATH = "src"

@@ -11,6 +11,16 @@ from .providers import AnthropicProvider, OpenAIProvider
 from .providers.base import Provider
 from .session_store import FileSessionStore, InMemorySessionStore
 from .session_store.base import SessionStore
+from .tools.confirmation import DelegatingConfirmationBridge
+from .tools.impl.edit_file import EditFileTool
+from .tools.impl.find_files import FindFilesTool
+from .tools.impl.read_file import ReadFileTool
+from .tools.impl.run_command import RunCommandTool
+from .tools.impl.search_code import SearchCodeTool
+from .tools.impl.write_file import WriteFileTool
+from .tools.registry import ToolRegistry
+from .tools.sandbox import WorkspaceSandbox
+from .tools.scheduler import ToolScheduler
 from .tui import ChatApp
 
 
@@ -27,7 +37,14 @@ def main() -> int:
 
     provider = build_provider(config)
     session_store = build_session_store(root_dir, config)
-    controller = ChatController(config=config, provider=provider, session_store=session_store)
+    registry, scheduler = build_tool_system(root_dir)
+    controller = ChatController(
+        config=config,
+        provider=provider,
+        session_store=session_store,
+        registry=registry,
+        scheduler=scheduler,
+    )
     app = ChatApp(controller)
     app.run()
     return 0
@@ -46,6 +63,21 @@ def build_session_store(root_dir: Path, config: AppConfig) -> SessionStore:
         storage_path = _resolve_path(root_dir, config.storage_path or "data/sessions")
         return FileSessionStore(storage_path)
     return InMemorySessionStore()
+
+
+def build_tool_system(root_dir: Path) -> tuple[ToolRegistry, ToolScheduler]:
+    registry = ToolRegistry()
+    registry.register(ReadFileTool())
+    registry.register(WriteFileTool())
+    registry.register(EditFileTool())
+    registry.register(RunCommandTool())
+    registry.register(FindFilesTool())
+    registry.register(SearchCodeTool())
+
+    sandbox = WorkspaceSandbox(root_dir)
+    bridge = DelegatingConfirmationBridge()
+    scheduler = ToolScheduler(registry, sandbox, bridge)
+    return registry, scheduler
 
 
 def _parse_args() -> argparse.Namespace:

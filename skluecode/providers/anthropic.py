@@ -5,7 +5,16 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from ..models import AppConfig, MessageRole, SessionRecord, StreamEvent, StreamEventType
+from ..models import (
+    AppConfig,
+    MessageKind,
+    MessageRole,
+    SessionRecord,
+    StreamEvent,
+    StreamEventType,
+    ToolCall,
+)
+from ..tools.base import NeutralToolDef
 from .base import (
     ProviderAuthError,
     ProviderConfigError,
@@ -19,6 +28,7 @@ class AnthropicProvider:
         self,
         config: AppConfig,
         session: SessionRecord,
+        tools: list[NeutralToolDef] | None = None,
     ) -> AsyncIterator[StreamEvent]:
         if config.enable_extended_thinking and not config.thinking_budget_tokens:
             raise ProviderConfigError("Anthropic extended thinking requires thinking_budget_tokens.")
@@ -42,17 +52,25 @@ class AnthropicProvider:
                 "type": "enabled",
                 "budget_tokens": config.thinking_budget_tokens,
             }
+        if tools:
+            payload["tools"] = [
+                {
+                    "name": tool_def.name,
+                    "description": tool_def.description,
+                    "input_schema": tool_def.parameters,
+                }
+                for tool_def in tools
+            ]
 
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0)) as client:
                 async with client.stream("POST", url, headers=headers, json=payload) as response:
                     await _raise_for_status(response)
+                    parser = _AnthropicStreamParser()
                     async for event_name, event_data in _iter_sse_events(response):
                         if event_name == "error":
                             raise ProviderProtocolError(_extract_anthropic_error(event_data))
-
-                        stream_event = _map_event(event_name, event_data)
-                        if stream_event is not None:
+                        for stream_event in parser.handle(event_name, event_data):
                             yield stream_event
         except httpx.TimeoutException as error:
             raise ProviderNetworkError("Anthropic request timed out.") from error
@@ -67,15 +85,127 @@ def _build_anthropic_messages(session: SessionRecord) -> list[dict[str, Any]]:
     for message in session.messages:
         if message.role == MessageRole.SYSTEM:
             continue
+
+        if message.kind == MessageKind.TOOL_RESULT:
+            blocks = [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": result.tool_call_id,
+                    "content": result.content,
+                }
+                for result in (message.tool_results or [])
+            ]
+            if not blocks:
+                continue
+            if messages and messages[-1]["role"] == "user":
+                messages[-1]["content"].extend(blocks)
+            else:
+                messages.append({"role": "user", "content": blocks})
+            continue
+
+        if message.kind == MessageKind.TOOL_CALL:
+            blocks: list[dict[str, Any]] = []
+            if message.content:
+                blocks.append({"type": "text", "text": message.content})
+            for call in message.tool_calls or []:
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": call.tool_call_id,
+                        "name": call.tool_name,
+                        "input": call.arguments or {},
+                    }
+                )
+            if blocks:
+                messages.append({"role": "assistant", "content": blocks})
+            continue
+
         if message.role not in {MessageRole.USER, MessageRole.ASSISTANT}:
             continue
-        messages.append(
-            {
-                "role": message.role.value,
-                "content": [{"type": "text", "text": message.content}],
-            }
-        )
+        text_block = [{"type": "text", "text": message.content}]
+        if messages and messages[-1]["role"] == message.role.value and message.role == MessageRole.USER:
+            messages[-1]["content"].extend(text_block)
+        else:
+            messages.append({"role": message.role.value, "content": text_block})
     return messages
+
+
+class _AnthropicStreamParser:
+    """Stateful mapper from Anthropic SSE events to unified StreamEvents."""
+
+    def __init__(self) -> None:
+        self._pending_tool_uses: dict[int, dict[str, str]] = {}
+        self._tool_calls: list[ToolCall] | None = None
+        self._next_id = 0
+
+    def handle(self, event_name: str, payload: dict[str, Any]) -> list[StreamEvent]:
+        events: list[StreamEvent] = []
+
+        if event_name == "content_block_start":
+            index = payload.get("index")
+            block = payload.get("content_block", {})
+            if block.get("type") == "tool_use" and isinstance(index, int):
+                self._pending_tool_uses[index] = {
+                    "id": block.get("id", ""),
+                    "name": block.get("name", ""),
+                    "args_acc": "",
+                }
+        elif event_name == "content_block_delta":
+            index = payload.get("index")
+            delta = payload.get("delta", {})
+            delta_type = delta.get("type")
+            if delta_type == "text_delta":
+                text = delta.get("text", "")
+                if isinstance(text, str) and text:
+                    events.append(StreamEvent(StreamEventType.ANSWER_DELTA, text=text, raw=payload))
+            elif delta_type == "thinking_delta":
+                text = delta.get("thinking", "")
+                if isinstance(text, str) and text:
+                    events.append(StreamEvent(StreamEventType.THINKING_DELTA, text=text, raw=payload))
+            elif delta_type == "input_json_delta":
+                if isinstance(index, int) and index in self._pending_tool_uses:
+                    partial = delta.get("partial_json", "")
+                    if isinstance(partial, str):
+                        self._pending_tool_uses[index]["args_acc"] += partial
+        elif event_name == "content_block_stop":
+            index = payload.get("index")
+            if isinstance(index, int) and index in self._pending_tool_uses:
+                entry = self._pending_tool_uses.pop(index)
+                self._finalize_tool_use(entry)
+        elif event_name == "message_stop":
+            if self._tool_calls:
+                events.append(
+                    StreamEvent(
+                        type=StreamEventType.TOOL_CALL_BATCH,
+                        raw=self._tool_calls,
+                        is_final=False,
+                    )
+                )
+
+        return events
+
+    def _finalize_tool_use(self, entry: dict[str, str]) -> None:
+        arguments: dict[str, Any] | None = None
+        parse_error: str | None = None
+        try:
+            parsed = json.loads(entry["args_acc"] or "{}")
+            if isinstance(parsed, dict):
+                arguments = parsed
+            else:
+                parse_error = f"Tool arguments must be a JSON object, got {type(parsed).__name__}."
+        except json.JSONDecodeError as error:
+            parse_error = f"JSON decode error: {error}"
+
+        call = ToolCall(
+            tool_call_id=entry["id"] or f"tool-use-{self._next_id}",
+            tool_name=entry["name"] or "",
+            arguments=arguments,
+            parse_error=parse_error,
+        )
+        self._next_id += 1
+        if self._tool_calls is None:
+            self._tool_calls = []
+        self._tool_calls.append(call)
 
 
 async def _iter_sse_events(response: httpx.Response) -> AsyncIterator[tuple[str, dict[str, Any]]]:
@@ -107,21 +237,6 @@ async def _iter_sse_events(response: httpx.Response) -> AsyncIterator[tuple[str,
         except json.JSONDecodeError as error:
             raise ProviderProtocolError("Anthropic stream returned invalid JSON.") from error
         yield event_name, payload
-
-
-def _map_event(event_name: str, payload: dict[str, Any]) -> StreamEvent | None:
-    if event_name == "content_block_delta":
-        delta = payload.get("delta", {})
-        delta_type = delta.get("type")
-        if delta_type == "text_delta":
-            text = delta.get("text", "")
-            if isinstance(text, str) and text:
-                return StreamEvent(StreamEventType.ANSWER_DELTA, text=text, raw=payload)
-        if delta_type == "thinking_delta":
-            text = delta.get("thinking", "")
-            if isinstance(text, str) and text:
-                return StreamEvent(StreamEventType.THINKING_DELTA, text=text, raw=payload)
-    return None
 
 
 async def _raise_for_status(response: httpx.Response) -> None:
