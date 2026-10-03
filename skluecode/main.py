@@ -4,6 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .agent import AgentRunner
 from .config import ConfigError, load_config
 from .controller import ChatController
 from .models import AppConfig, ProtocolType, SessionMode
@@ -38,12 +39,11 @@ def main() -> int:
     provider = build_provider(config)
     session_store = build_session_store(root_dir, config)
     registry, scheduler = build_tool_system(root_dir)
+    agent = AgentRunner(provider, registry, scheduler, config, max_iterations=10)
     controller = ChatController(
         config=config,
-        provider=provider,
         session_store=session_store,
-        registry=registry,
-        scheduler=scheduler,
+        agent=agent,
     )
     app = ChatApp(controller)
     app.run()

@@ -21,6 +21,19 @@ class SessionMode(StrEnum):
     PERSISTENT = "persistent"
 
 
+class AgentMode(StrEnum):
+    NORMAL = "normal"
+    PLAN = "plan"
+
+
+class StopReason(StrEnum):
+    MODEL_DONE = "model_done"
+    MAX_ITERATIONS = "max_iterations"
+    USER_CANCELLED = "user_cancelled"
+    UNKNOWN_TOOL_REPEATED = "unknown_tool_repeated"
+    PROVIDER_ERROR = "provider_error"
+
+
 class MessageRole(StrEnum):
     SYSTEM = "system"
     USER = "user"
@@ -42,6 +55,9 @@ class StreamEventType(StrEnum):
     TOOL_CALL_DELTA = "tool_call_delta"
     TOOL_CALL_BATCH = "tool_call_batch"
     TOOL_RESULT_READY = "tool_result_ready"
+    TOKEN_USAGE = "token_usage"
+    PROGRESS = "progress"
+    LOOP_END = "loop_end"
 
 
 @dataclass(slots=True)
@@ -100,6 +116,50 @@ class ToolResult:
             content=payload.get("content", ""),
             truncated=bool(payload.get("truncated", False)),
             target=payload.get("target"),
+        )
+
+
+@dataclass(slots=True)
+class TokenUsage:
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "TokenUsage":
+        return cls(
+            input_tokens=int(payload.get("input_tokens", 0)),
+            output_tokens=int(payload.get("output_tokens", 0)),
+            total_tokens=payload.get("total_tokens"),
+        )
+
+
+@dataclass(slots=True)
+class AgentProgress:
+    iteration: int
+    max_iterations: int
+    phase: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "iteration": self.iteration,
+            "max_iterations": self.max_iterations,
+            "phase": self.phase,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "AgentProgress":
+        return cls(
+            iteration=int(payload["iteration"]),
+            max_iterations=int(payload["max_iterations"]),
+            phase=payload["phase"],
         )
 
 

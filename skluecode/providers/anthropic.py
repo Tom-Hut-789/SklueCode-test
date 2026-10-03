@@ -12,6 +12,7 @@ from ..models import (
     SessionRecord,
     StreamEvent,
     StreamEventType,
+    TokenUsage,
     ToolCall,
 )
 from ..tools.base import NeutralToolDef
@@ -29,6 +30,7 @@ class AnthropicProvider:
         config: AppConfig,
         session: SessionRecord,
         tools: list[NeutralToolDef] | None = None,
+        system_prompt: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         if config.enable_extended_thinking and not config.thinking_budget_tokens:
             raise ProviderConfigError("Anthropic extended thinking requires thinking_budget_tokens.")
@@ -47,6 +49,8 @@ class AnthropicProvider:
             "max_tokens": 4096,
             "messages": _build_anthropic_messages(session),
         }
+        if system_prompt:
+            payload["system"] = system_prompt
         if config.enable_extended_thinking:
             payload["thinking"] = {
                 "type": "enabled",
@@ -137,11 +141,27 @@ class _AnthropicStreamParser:
         self._pending_tool_uses: dict[int, dict[str, str]] = {}
         self._tool_calls: list[ToolCall] | None = None
         self._next_id = 0
+        self._input_tokens: int | None = None
+        self._output_tokens: int | None = None
 
     def handle(self, event_name: str, payload: dict[str, Any]) -> list[StreamEvent]:
         events: list[StreamEvent] = []
 
-        if event_name == "content_block_start":
+        if event_name == "message_start":
+            message = payload.get("message")
+            if isinstance(message, dict):
+                usage = message.get("usage")
+                if isinstance(usage, dict):
+                    input_tokens = usage.get("input_tokens")
+                    if isinstance(input_tokens, int):
+                        self._input_tokens = input_tokens
+        elif event_name == "message_delta":
+            usage = payload.get("usage")
+            if isinstance(usage, dict):
+                output_tokens = usage.get("output_tokens")
+                if isinstance(output_tokens, int):
+                    self._output_tokens = output_tokens
+        elif event_name == "content_block_start":
             index = payload.get("index")
             block = payload.get("content_block", {})
             if block.get("type") == "tool_use" and isinstance(index, int):
@@ -173,6 +193,19 @@ class _AnthropicStreamParser:
                 entry = self._pending_tool_uses.pop(index)
                 self._finalize_tool_use(entry)
         elif event_name == "message_stop":
+            if self._input_tokens is not None or self._output_tokens is not None:
+                input_tokens = self._input_tokens or 0
+                output_tokens = self._output_tokens or 0
+                events.append(
+                    StreamEvent(
+                        type=StreamEventType.TOKEN_USAGE,
+                        raw=TokenUsage(
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            total_tokens=input_tokens + output_tokens,
+                        ),
+                    )
+                )
             if self._tool_calls:
                 events.append(
                     StreamEvent(

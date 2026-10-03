@@ -12,6 +12,7 @@ from ..models import (
     SessionRecord,
     StreamEvent,
     StreamEventType,
+    TokenUsage,
     ToolCall,
 )
 from ..tools.base import NeutralToolDef
@@ -24,6 +25,7 @@ class OpenAIProvider:
         config: AppConfig,
         session: SessionRecord,
         tools: list[NeutralToolDef] | None = None,
+        system_prompt: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         yield StreamEvent(type=StreamEventType.MESSAGE_START)
 
@@ -35,7 +37,8 @@ class OpenAIProvider:
         payload: dict[str, Any] = {
             "model": config.model,
             "stream": True,
-            "messages": _build_openai_messages(session),
+            "stream_options": {"include_usage": True},
+            "messages": _build_openai_messages(session, system_prompt),
         }
         if tools:
             payload["tools"] = [
@@ -75,6 +78,10 @@ class OpenAIProvider:
                                 raw=data,
                             )
 
+                        usage = _extract_usage(data)
+                        if usage is not None:
+                            yield StreamEvent(type=StreamEventType.TOKEN_USAGE, raw=usage)
+
                         _accumulate_tool_call_delta(data, pending_tool_calls)
 
                         if _is_final_tool_call_chunk(data):
@@ -94,8 +101,13 @@ class OpenAIProvider:
         yield StreamEvent(type=StreamEventType.MESSAGE_END, is_final=True)
 
 
-def _build_openai_messages(session: SessionRecord) -> list[dict[str, Any]]:
+def _build_openai_messages(
+    session: SessionRecord,
+    system_prompt: str | None = None,
+) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
     for message in session.messages:
         if message.kind == MessageKind.TOOL_RESULT:
             for result in message.tool_results or []:
@@ -144,6 +156,24 @@ def _extract_text_delta(chunk: dict[str, Any]) -> str:
     delta = choices[0].get("delta", {})
     content = delta.get("content", "")
     return content if isinstance(content, str) else ""
+
+
+def _extract_usage(chunk: dict[str, Any]) -> TokenUsage | None:
+    usage = chunk.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    input_tokens = usage.get("prompt_tokens")
+    output_tokens = usage.get("completion_tokens")
+    if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
+        return None
+
+    total_tokens = usage.get("total_tokens")
+    return TokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens if isinstance(total_tokens, int) else None,
+    )
 
 
 def _accumulate_tool_call_delta(chunk: dict[str, Any], pending: dict[int, dict[str, str]]) -> None:

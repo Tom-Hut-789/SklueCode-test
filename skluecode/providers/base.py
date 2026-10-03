@@ -32,5 +32,6 @@ class Provider(Protocol):
         config: AppConfig,
         session: SessionRecord,
         tools: list[NeutralToolDef] | None = None,
+        system_prompt: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         ...

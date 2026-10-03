@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Iterable
+
 from .base import NeutralToolDef, Tool, ToolNotFoundError
 
 
@@ -19,12 +21,17 @@ class ToolRegistry:
             raise ToolNotFoundError(f"Tool not registered: {name}")
         return tool
 
-    def to_neutral_definitions(self) -> list[NeutralToolDef]:
+    def to_neutral_definitions(self, names: Iterable[str] | None = None) -> list[NeutralToolDef]:
+        if names is None:
+            selected = list(self._tools.values())
+        else:
+            wanted = set(names)
+            selected = [tool for tool in self._tools.values() if tool.name in wanted]
         return [
             NeutralToolDef(
                 name=tool.name,
                 description=tool.description,
                 parameters=dict(tool.parameters_json_schema),
             )
-            for tool in self._tools.values()
+            for tool in selected
         ]
